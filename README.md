@@ -14,3 +14,6 @@ The packages required to run this repo are specified in ```requirements.txt```. 
 You **do not** need to write any code for this part! Simply run the notebook ```stylegan2_lab_test.ipynb``` and ensure that it runs successfully, and you can see a photo of a face printed below the last cell. 
 
 ### Done! :) 
+
+### Lecture slides
+https://susiesyli.com/cs178-latent-space-lecture/#0
