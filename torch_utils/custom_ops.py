@@ -30,6 +30,7 @@ def _find_compiler_bindir():
         'C:/Program Files (x86)/Microsoft Visual Studio/*/Professional/VC/Tools/MSVC/*/bin/Hostx64/x64',
         'C:/Program Files (x86)/Microsoft Visual Studio/*/BuildTools/VC/Tools/MSVC/*/bin/Hostx64/x64',
         'C:/Program Files (x86)/Microsoft Visual Studio/*/Community/VC/Tools/MSVC/*/bin/Hostx64/x64',
+        'C:/Program Files (x86)/Microsoft Visual Studio/18/*/VC/Tools/MSVC/*/bin/Hostx64/x64',  # VS 2022 (edition 18) fallback
         'C:/Program Files (x86)/Microsoft Visual Studio */vc/bin',
     ]
     for pattern in patterns:
@@ -58,11 +59,26 @@ def get_plugin(module_name, sources, **build_kwargs):
 
     try: # pylint: disable=too-many-nested-blocks
         # Make sure we can find the necessary compiler binaries.
-        if os.name == 'nt' and os.system("where cl.exe >nul 2>nul") != 0:
-            compiler_bindir = _find_compiler_bindir()
-            if compiler_bindir is None:
-                raise RuntimeError(f'Could not find MSVC/GCC/CLANG installation on this computer. Check _find_compiler_bindir() in "{__file__}".')
-            os.environ['PATH'] += ';' + compiler_bindir
+        if os.name == 'nt':
+            if os.system("where cl.exe >nul 2>nul") != 0:
+                compiler_bindir = _find_compiler_bindir()
+                if compiler_bindir is None:
+                    raise RuntimeError(f'Could not find MSVC/GCC/CLANG installation on this computer. Check _find_compiler_bindir() in "{__file__}".')
+                os.environ['PATH'] += ';' + compiler_bindir
+            # Also ensure CUDA is on PATH if installed
+            if os.system("where nvcc.exe >nul 2>nul") != 0:
+                cuda_root = os.environ.get('CUDA_PATH')
+                if not cuda_root:
+                    # Try standard NVIDIA CUDA locations
+                    for cuda_version in ['v13.2', 'v12.6', 'v12.1', 'v12.0', 'v11.8', 'v11.7']:
+                        cuda_candidate = f'C:\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA\\{cuda_version}'
+                        if os.path.isdir(cuda_candidate):
+                            cuda_root = cuda_candidate
+                            break
+                if cuda_root and os.path.isdir(cuda_root):
+                    cuda_bindir = os.path.join(cuda_root, 'bin')
+                    if cuda_bindir not in os.environ['PATH']:
+                        os.environ['PATH'] += ';' + cuda_bindir
 
         # Compile and load.
         verbose_build = (verbosity == 'full')

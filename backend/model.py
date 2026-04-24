@@ -24,6 +24,7 @@ if torch.cuda.is_available():
     device = 'cuda'
 elif torch.backends.mps.is_available():
     device = 'mps'
+print(f'Using device: {device}')
 
 with open('download/ffhq.pkl', 'rb') as f:
     G = pkl.load(f)['G_ema'].to(device)
@@ -115,7 +116,7 @@ def interpolate(z_id_a, z_id_b, steps=7):
     ids = []
     alphas = list(np.linspace(0.0, 1.0, steps))
     for i, a in enumerate(alphas):
-        z_new = a * z_a + (1-a) * z_b # TODO 
+        z_new = (1-a) * z_a + a * z_b # TODO 
         new_id = _save_z_and_get_id(z_new)
         ids.append(new_id)
         img_b64 = generate_from_z_tensor(z_new)
