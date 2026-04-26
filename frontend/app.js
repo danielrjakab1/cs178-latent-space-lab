@@ -176,49 +176,63 @@ async function getFilmstrip() {
   const a = currentA(), b = currentB()
   if (!a || !b) return
   const res = await postJSON('/interpolate', { id_a: a.id, id_b: b.id, steps: 7 })
-  if (res && res.images) renderFilmstrip(res.images, res.ts)
+  if (res && res.images) renderFilmstrip(res.images, res.ts, res.latent_ids)
 }
 
 // ─── Filmstrip rendering ──────────────────────────────────────────────────────
 // Backend convention:
-//   t = 0  ->  pure A (left)
-//   t = 1  ->  pure B (right)
+//   t = 0  ->  pure B (left)
+//   t = 1  ->  pure A (right)
 //
 // Slider weight convention (what the user sees):
-//   w = 1  ->  pure A   (left side of slider)
-//   w = 0  ->  pure B   (right side of slider)
+//   w = 1  ->  pure B   (left side of slider)
+//   w = 0  ->  pure A   (right side of slider)
 //   w = 1 - t
 //
-// Display order: we want w=1.0 (pure A) on the LEFT and w=0.0 (pure B) on
+// Display order: we want w=1.0 (pure B) on the LEFT and w=0.0 (pure A) on
 // the RIGHT, so we REVERSE the images array before rendering.
-function renderFilmstrip(images, ts) {
+function renderFilmstrip(images, ts, latentIds) {
   const container = el('interpResults')
   if (!container) return
   container.innerHTML = ''
 
-  // Reverse so pure-A is on the left (w=1.0) and pure-B is on the right (w=0.0)
-  const reversed = images.map((src, i) => ({ src, t: ts ? ts[i] : i / (images.length - 1) })).reverse()
+  // Reverse so pure-B is on the left (w=1.0) and pure-A is on the right (w=0.0)
+  const reversed = images.map((src, i) => ({
+    src,
+    t: ts ? ts[i] : i / (images.length - 1),
+    latentId: latentIds ? latentIds[i] : null
+  })).reverse()
 
-  reversed.forEach(({ src, t }) => {
-    const weight = parseFloat((1 - t).toFixed(2))   // slider value: w = 1 - t
+  reversed.forEach(({ src, t, latentId }) => {
+    const exactWeight = 1 - t
+    const displayWeight = parseFloat(exactWeight.toFixed(2))
 
     const fig = document.createElement('figure')
     fig.className = 'interp-thumb'
 
     const img = document.createElement('img')
     img.src = src
-    img.alt = `w=${weight.toFixed(2)}`
-    img.dataset.weight = String(weight)
+    img.alt = `w=${displayWeight.toFixed(2)}`
+    img.dataset.weight = String(displayWeight)
+    img.dataset.weightExact = String(exactWeight)
+    if (latentId) img.dataset.latentId = String(latentId)
 
     img.addEventListener('click', () => {
-      el('weight').value = String(weight)
-      setWeightVal(weight)
-      triggerWeightedUpdate()
-      highlightThumb(weight)
+      if (interpTimeout) {
+        clearTimeout(interpTimeout)
+        interpTimeout = null
+      }
+
+      // Keep slider UI in sync while showing the already-cached thumbnail image.
+      el('weight').value = String(displayWeight)
+      setWeightVal(displayWeight)
+      el('imgOut').src = src
+      setFormula(`z_out = ${exactWeight.toFixed(2)} * z_B + ${(1 - exactWeight).toFixed(2)} * z_A`)
+      highlightThumb(exactWeight)
     })
 
     const cap = document.createElement('figcaption')
-    cap.textContent = weight.toFixed(2)
+    cap.textContent = displayWeight.toFixed(2)
 
     fig.appendChild(img)
     fig.appendChild(cap)
@@ -232,7 +246,8 @@ function highlightThumb(weight) {
   const container = el('interpResults')
   if (!container) return
   container.querySelectorAll('.interp-thumb').forEach(f => {
-    const w = Number(f.querySelector('img').dataset.weight)
+    const img = f.querySelector('img')
+    const w = Number(img.dataset.weightExact ?? img.dataset.weight)
     f.classList.toggle('selected', Math.abs(w - weight) < 0.005)
   })
 }
@@ -251,7 +266,7 @@ function triggerWeightedUpdate() {
       const res = await postJSON('/interpolate', { id_a: a.id, id_b: b.id, weight: w })
       if (res && res.image) {
         el('imgOut').src = res.image
-        setFormula(`z_out = ${w.toFixed(2)} * z_A + ${(1 - w).toFixed(2)} * z_B`)
+        setFormula(`z_out = ${w.toFixed(2)} * z_B + ${(1 - w).toFixed(2)} * z_A`)
         highlightThumb(w)
       }
     } catch (e) {
