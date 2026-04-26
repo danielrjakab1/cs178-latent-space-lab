@@ -11,54 +11,66 @@
       <h1>StyleGAN2 Latent Space Lab</h1>
 
       <div class="top-row">
+        <!-- Image A -->
         <div class="card" id="cardA">
           <div class="card-header">Image A</div>
           <div class="card-body"><img id="imgA" src="" alt="Image A" /></div>
           <div class="card-footer">
-            <button id="genA" title="Draw a new random latent z for Image A">Generate / Redraw A</button>
-            <button id="undoA" title="Revert to previous latent" disabled>Undo</button>
+            <button id="genA" class="btn-primary">Generate New</button>
+            <div class="nav-group">
+              <button id="backA" class="btn-nav" title="Previous image" disabled>&#8592;</button>
+              <button id="fwdA"  class="btn-nav" title="Next image"     disabled>&#8594;</button>
+            </div>
           </div>
         </div>
 
+        <!-- Image B -->
         <div class="card" id="cardB">
           <div class="card-header">Image B</div>
           <div class="card-body"><img id="imgB" src="" alt="Image B" /></div>
           <div class="card-footer">
-            <button id="genB" title="Draw a new random latent z for Image B">Generate / Redraw B</button>
-            <button id="undoB" title="Revert to previous latent" disabled>Undo</button>
+            <button id="genB" class="btn-primary">Generate New</button>
+            <div class="nav-group">
+              <button id="backB" class="btn-nav" title="Previous image" disabled>&#8592;</button>
+              <button id="fwdB"  class="btn-nav" title="Next image"     disabled>&#8594;</button>
+            </div>
           </div>
         </div>
 
+        <!-- Result -->
         <div class="card result-card" id="cardOut">
           <div class="card-header">Result</div>
           <div class="card-body"><img id="imgOut" src="" alt="Result" /></div>
-          <div class="card-footer"><button id="clearOut">Clear</button></div>
+          <div class="card-footer">
+            <button id="clearOut" class="btn-secondary">Clear</button>
+          </div>
         </div>
       </div>
 
+      <!-- Operations -->
       <div class="ops-card">
         <div class="ops-grid">
           <div class="ops-section">
             <h3>Arithmetic</h3>
             <div class="ops-row">
-              <button id="opAdd" disabled>A + B</button>
-              <button id="opSubAB" disabled>A - B</button>
-              <button id="opSubBA" disabled>B - A</button>
+              <button id="opAdd"   disabled>A + B</button>
+              <button id="opSubAB" disabled>A &minus; B</button>
+              <button id="opSubBA" disabled>B &minus; A</button>
             </div>
             <div class="formula" id="formula">z_out = —</div>
             <div id="msg" class="msg"></div>
           </div>
 
           <div class="ops-section">
-              <h3>Interpolation</h3>
-              <div class="interp-controls">
-                <label for="weight">Interpolation Weight (w)</label>
-                <input id="weight" type="range" min="0" max="1" step="0.01" value="0.5" />
-                <span id="weightVal">0.50</span>
-                <button id="doInterp" disabled>Interpolate</button>
-              </div>
-              <div id="interpMsg" class="msg"></div>
-              <div class="interp-thumbs" id="interpResults" aria-live="polite"></div>
+            <h3>Interpolation</h3>
+            <div class="interp-controls">
+              <label for="weight">Interpolation Weight (w)</label>
+              <input id="weight" type="range" min="0" max="1" step="0.01" value="0.5" />
+              <span id="weightVal">0.50</span>
+              <button id="doInterp" class="btn-primary-sm" disabled>Interpolate</button>
+            </div>
+            <div id="interpMsg" class="msg"></div>
+            <div class="interp-thumbs" id="interpResults" aria-live="polite"></div>
           </div>
         </div>
       </div>

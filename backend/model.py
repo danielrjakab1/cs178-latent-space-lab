@@ -1,23 +1,41 @@
-# model HANDOUT
+# model — latent-space lab backend
+#
+# Images are keyed by a deterministic SHA-256 hash of the raw latent bytes so
+# the same mathematical vector always maps to the same cached PNG.
+#
+# Latents are held in an in-process dict (LATENT_CACHE) for the lifetime of
+# the server.  No latent files are written to disk — only PNG images are
+# persisted.
+#
+# Interpolation convention (used everywhere):
+#   z_out = (1 - t) * z_A  +  t * z_B      (t in [0, 1])
+#   t = 0  ->  pure A
+#   t = 1  ->  pure B
+#
+# The slider "weight" w exposed to the frontend maps as:
+#   w = 1 - t   ->   w = 1 means pure A, w = 0 means pure B
+# So internally we always convert: t = 1 - w before calling _blend.
+
 import os
-import uuid
-import pickle as pkl
+import hashlib
 import base64
 import io
 import numpy as np
+import pickle as pkl
 
 import torch
 from PIL import Image
 
-# Data dirs
-ROOT = os.path.dirname(os.path.dirname(__file__))
-DATA_DIR = os.path.join(ROOT, 'data')
-LATENT_DIR = os.path.join(DATA_DIR, 'latents')
+# ── Directories ───────────────────────────────────────────────────────────────
+ROOT      = os.path.dirname(os.path.dirname(__file__))
+DATA_DIR  = os.path.join(ROOT, 'data')
 IMAGE_DIR = os.path.join(DATA_DIR, 'images')
-os.makedirs(LATENT_DIR, exist_ok=True)
 os.makedirs(IMAGE_DIR, exist_ok=True)
 
-# Load the pretrained StyleGAN2 generator once at import
+# ── In-process latent cache (z_id -> CPU tensor) ──────────────────────────────
+LATENT_CACHE: dict = {}
+
+# ── Load generator ────────────────────────────────────────────────────────────
 print('Loading StyleGAN2 generator (this may take a while)...')
 device = 'cpu'
 if torch.cuda.is_available():
@@ -32,111 +50,114 @@ G.eval()
 print('Generator loaded: z_dim=', G.z_dim, 'resolution=', G.img_resolution)
 
 
-def _synth_to_pil(img_tensor):
-    img = (img_tensor * 127.5 + 128).clamp(0, 255).to(torch.uint8).cpu().numpy()
-    arr = img[0].transpose(1, 2, 0)
-    return Image.fromarray(arr)
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
+def _tensor_hash(z: torch.Tensor) -> str:
+    """Stable SHA-256 of raw float32 bytes -- same vector -> same hash."""
+    raw = z.cpu().to(torch.float32).numpy().tobytes()
+    return hashlib.sha256(raw).hexdigest()
 
 
-def _save_z_and_get_id(z_tensor):
-    z_id = uuid.uuid4().hex
-    path = os.path.join(LATENT_DIR, f"{z_id}.pth")
-    torch.save(z_tensor.cpu(), path)
-    return z_id
+def _image_path(h: str) -> str:
+    return os.path.join(IMAGE_DIR, f'{h}.png')
 
 
-def _z_path(z_id):
-    return os.path.join(LATENT_DIR, f"{z_id}.pth")
-
-
-def _image_path(img_id):
-    return os.path.join(IMAGE_DIR, f"{img_id}.png")
-
-
-def _pil_to_data_url(pil_img):
+def _pil_to_data_url(img: Image.Image) -> str:
     buf = io.BytesIO()
-    pil_img.save(buf, format='PNG')
+    img.save(buf, format='PNG')
     b = base64.b64encode(buf.getvalue()).decode('ascii')
-    return f"data:image/png;base64,{b}"
+    return f'data:image/png;base64,{b}'
 
+
+def _synth_to_pil(t: torch.Tensor) -> Image.Image:
+    arr = (t * 127.5 + 128).clamp(0, 255).to(torch.uint8).cpu().numpy()
+    return Image.fromarray(arr[0].transpose(1, 2, 0))
+
+
+def _generate_pil(z: torch.Tensor) -> Image.Image:
+    z = z.to(device)
+    with torch.no_grad():
+        w = G.mapping(z, None)
+        return _synth_to_pil(G.synthesis(w))
+
+
+def _get_or_generate(z: torch.Tensor):
+    """
+    Return (z_id, data_url).
+    z_id is the SHA-256 hash of the latent tensor; it is stored in the
+    in-process LATENT_CACHE so future calls (arithmetic / interpolation)
+    can retrieve the tensor by ID without touching the filesystem.
+    """
+    z_cpu   = z.cpu().to(torch.float32)
+    z_id    = _tensor_hash(z_cpu)
+    img_pth = _image_path(z_id)
+
+    # Always keep the tensor available in memory
+    LATENT_CACHE[z_id] = z_cpu
+
+    if os.path.exists(img_pth):
+        with open(img_pth, 'rb') as f:
+            b = base64.b64encode(f.read()).decode('ascii')
+        return z_id, f'data:image/png;base64,{b}'
+
+    pil = _generate_pil(z_cpu)
+    pil.save(img_pth, format='PNG')
+    return z_id, _pil_to_data_url(pil)
+
+
+def _load_z(z_id: str) -> torch.Tensor:
+    if z_id in LATENT_CACHE:
+        return LATENT_CACHE[z_id]
+    raise FileNotFoundError(f'latent id not found in session cache: {z_id}')
+
+
+def _blend(z_a: torch.Tensor, z_b: torch.Tensor, t: float) -> torch.Tensor:
+    """z_out = (1-t)*z_A + t*z_B.  t=0 -> pure A, t=1 -> pure B."""
+    return (1.0 - t) * z_a + t * z_b
+
+
+# ── Public API ────────────────────────────────────────────────────────────────
 
 def sample_and_generate():
-    z = torch.randn([1, G.z_dim], device=device) # TODO: sample z 
-    z_id = _save_z_and_get_id(z)
-    img_b64 = generate_from_z_tensor(z)
-    return z_id, img_b64
+    """Draw a random latent and return (z_id, image_data_url)."""
+    z = torch.randn([1, G.z_dim], device=device)
+    return _get_or_generate(z)
 
 
-def generate_from_z_tensor(z_tensor):
-    z = z_tensor.to(device)
-    with torch.no_grad():
-        c = None
-        w = G.mapping(z, c)
-        img_tensor = G.synthesis(w)
-        pil = _synth_to_pil(img_tensor)
-        return _pil_to_data_url(pil)
+def arithmetic(z_id_a: str, z_id_b: str, operation: str = 'add'):
+    z_a = _load_z(z_id_a).to(device)
+    z_b = _load_z(z_id_b).to(device)
+    if   operation == 'add':         z_new = z_a + z_b
+    elif operation == 'subtract_ab': z_new = z_a - z_b
+    elif operation == 'subtract_ba': z_new = z_b - z_a
+    else: raise ValueError(f'unsupported operation: {operation}')
+    return _get_or_generate(z_new)
 
 
-def generate_from_z_id(z_id):
-    path = _z_path(z_id)
-    if not os.path.exists(path):
-        raise FileNotFoundError(f'latent id not found: {z_id}')
-    z = torch.load(path).to(device)
-    return generate_from_z_tensor(z)
-
-
-def arithmetic(z_id_a, z_id_b, operation='add'):
-    path_a = _z_path(z_id_a)
-    path_b = _z_path(z_id_b)
-    if not os.path.exists(path_a) or not os.path.exists(path_b):
-        raise FileNotFoundError('one or both latent ids not found')
-    z_a = torch.load(path_a).to(device)
-    z_b = torch.load(path_b).to(device)
-    if operation == 'add':
-        z_new = z_a + z_b # TODO 
-    elif operation == 'subtract_ab':
-        z_new = z_a - z_b # TODO 
-    elif operation == 'subtract_ba':
-        z_new = z_b - z_a # TODO 
-    else:
-        raise ValueError('unsupported operation')
-    new_id = _save_z_and_get_id(z_new)
-    img_b64 = generate_from_z_tensor(z_new)
-    return new_id, img_b64
-
-
-def interpolate(z_id_a, z_id_b, steps=7):
-    path_a = _z_path(z_id_a)
-    path_b = _z_path(z_id_b)
-    if not os.path.exists(path_a) or not os.path.exists(path_b):
-        raise FileNotFoundError('one or both latent ids not found')
-    z_a = torch.load(path_a).to(device)
-    z_b = torch.load(path_b).to(device)
-    imgs = []
-    ids = []
-    alphas = list(np.linspace(0.0, 1.0, steps))
-    for i, a in enumerate(alphas):
-        z_new = (1-a) * z_a + a * z_b # TODO 
-        new_id = _save_z_and_get_id(z_new)
+def interpolate(z_id_a: str, z_id_b: str, steps: int = 7):
+    """
+    Return a filmstrip of `steps` images from A (t=0) to B (t=1).
+    ts values are returned so the frontend can convert to slider weight w = 1 - t.
+    """
+    z_a = _load_z(z_id_a).to(device)
+    z_b = _load_z(z_id_b).to(device)
+    ts  = list(np.linspace(0.0, 1.0, steps))   # t=0 -> A, t=1 -> B
+    ids, imgs = [], []
+    for t in ts:
+        new_id, img_b64 = _get_or_generate(_blend(z_a, z_b, t))
         ids.append(new_id)
-        img_b64 = generate_from_z_tensor(z_new)
         imgs.append(img_b64)
-    return {"latent_ids": ids, "images": imgs, "alphas": alphas}
+    return {'latent_ids': ids, 'images': imgs, 'ts': ts}
 
 
-def interpolate_weight(z_id_a, z_id_b, weight=0.5):
+def interpolate_weight(z_id_a: str, z_id_b: str, weight: float = 0.5):
     """
-    Interpolate a single weighted latent: final_z = weight * z_a + (1-weight) * z_b
-    Returns (new_id, image_data_url)
+    Single weighted blend using the slider convention:
+      w = 1 -> pure A,  w = 0 -> pure B
+    Converts to t = 1 - w so _blend() is used and results are always
+    served from the image cache (no cache miss vs the filmstrip).
     """
-    path_a = _z_path(z_id_a)
-    path_b = _z_path(z_id_b)
-    if not os.path.exists(path_a) or not os.path.exists(path_b):
-        raise FileNotFoundError('one or both latent ids not found')
-    z_a = torch.load(path_a).to(device)
-    z_b = torch.load(path_b).to(device)
-    w = float(weight)
-    z_new = w * z_a + (1-w) * z_b # TODO 
-    new_id = _save_z_and_get_id(z_new)
-    img_b64 = generate_from_z_tensor(z_new)
-    return new_id, img_b64
+    z_a = _load_z(z_id_a).to(device)
+    z_b = _load_z(z_id_b).to(device)
+    t   = 1.0 - float(weight)      # slider weight -> blend param
+    return _get_or_generate(_blend(z_a, z_b, t))

@@ -22,7 +22,6 @@ app.add_middleware(
 # Serve frontend files
 frontend_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'frontend'))
 if os.path.isdir(frontend_dir):
-    # Serve static frontend assets under /static to avoid shadowing API routes
     app.mount("/static", StaticFiles(directory=frontend_dir), name="static")
 
 
@@ -48,9 +47,9 @@ class ArithmeticRequest(BaseModel):
 class InterpRequest(BaseModel):
     id_a: str
     id_b: str
-    # If `weight` is provided, a single weighted interpolation is performed.
+    # Single weighted interpolation (slider drag / filmstrip click)
     weight: Optional[float] = None
-    # For backward compatibility, steps may still be provided for interpolation
+    # Full filmstrip generation
     steps: Optional[int] = None
 
 
@@ -66,7 +65,6 @@ def generate():
 @app.post('/arithmetic', response_model=GenerateResponse)
 def arithmetic(req: ArithmeticRequest):
     try:
-        # validate files exist
         new_id, img_b64 = model.arithmetic(req.id_a, req.id_b, req.operation)
         return {"latent_id": new_id, "image": img_b64}
     except FileNotFoundError as e:
@@ -86,7 +84,7 @@ def health():
 def interpolate(req: InterpRequest):
     try:
         if req.weight is not None:
-            # single weighted interpolation -> return single image and latent id
+            # Single weighted interpolation -> return single image + latent id
             new_id, img = model.interpolate_weight(req.id_a, req.id_b, weight=float(req.weight))
             return {"latent_id": new_id, "image": img}
         else:
