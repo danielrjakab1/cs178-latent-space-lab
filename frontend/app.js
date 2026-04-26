@@ -62,11 +62,9 @@ function refreshAllButtons() {
 // ─── History helpers ──────────────────────────────────────────────────────────
 function pushHistory(target, entry) {
   if (target === 'A') {
-    historyA = historyA.slice(0, pointerA + 1)
     historyA.push(entry)
     pointerA = historyA.length - 1
   } else {
-    historyB = historyB.slice(0, pointerB + 1)
     historyB.push(entry)
     pointerB = historyB.length - 1
   }
